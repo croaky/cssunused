@@ -48,7 +48,7 @@ func Refs(root string, builders []string) (map[string]bool, error) {
 	for _, path := range paths {
 		ext := filepath.Ext(path)
 		switch ext {
-		case ".hml", ".html", ".go", ".ts", ".tsx", ".js":
+		case ".hml", ".html", ".go", ".ts", ".js":
 		default:
 			continue
 		}
@@ -66,7 +66,7 @@ func Refs(root string, builders []string) (map[string]bool, error) {
 			add(out, scriptClasses(text, builderRE))
 		case ".html":
 			add(out, attrClasses(text))
-		case ".ts", ".tsx", ".js":
+		case ".ts", ".js":
 			add(out, scriptClasses(text, builderRE))
 		case ".go":
 			classes, err := goClasses(path, text)

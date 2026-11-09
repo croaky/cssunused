@@ -55,7 +55,7 @@ element, not a word read out of a file.
   name a partial's class local wears. A `:javascript` block is read
   with the script rules.
 - `.html`: `class=` attributes.
-- `.ts`, `.tsx`, and `.js`: a `className`, the arguments of a
+- `.ts` and `.js`: a `className`, the arguments of a
   `classList` call, the `.class` selectors inside a `querySelector`,
   `closest`, or `matches` string, and the arguments of each `-builder`
   function.
