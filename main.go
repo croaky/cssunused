@@ -14,13 +14,14 @@
 // interpolated into the name. An allowlist is how a whole utility scale
 // gets deleted as unused while a Sprintf goes on naming it.
 //
-// An app that serves the sheet of a Go module beside its own names the
-// module with -module. The command then reads the module too: its .css
-// files for the classes it defines, and its views, scripts, and Go for
-// the classes it writes. A module rule that only the module's views
-// write is not unused, and an app rule that styles a module class is
-// live when the module writes that class. The lint reads the app's
-// sheets only, because a module keeps the rules of its own repo.
+// An app that serves the sheet of a Go module beside its own, or that
+// renders the markup of a Go module, names the module with -module. The
+// command then reads the module too: its .css files for the classes it
+// defines, and its views, scripts, and Go for the classes it writes. A
+// module rule that only the module's views write is not unused, and an
+// app rule that styles a module class is live when the module writes
+// that class. The lint reads the app's sheets only, because a module
+// keeps the rules of its own repo.
 //
 // Usage:
 //
@@ -105,15 +106,11 @@ func run(root string, sheets, modules, builders []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		moduleRefs, err := Refs(dir, builders)
+		classes, moduleRefs, err := readModule(dir, builders)
 		if err != nil {
 			return nil, err
 		}
 		maps.Copy(refs, moduleRefs)
-		classes, err := moduleClasses(dir)
-		if err != nil {
-			return nil, err
-		}
 		defined = append(defined, classes...)
 	}
 	var out []string
@@ -140,6 +137,28 @@ func readSheet(path string) (Sheet, error) {
 	return sheet, nil
 }
 
+// readModule reads the module in dir: the classes its sheets define, and
+// the classes its views, scripts, and Go write.
+//
+// A module can ship no sheet. A package that writes markup can leave
+// the colors to each app, and the app's sheet styles the classes the
+// package writes. But a module that neither defines nor writes a class
+// is an error, because the flag then names the wrong module.
+func readModule(dir string, builders []string) ([]string, map[string]bool, error) {
+	classes, err := moduleClasses(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	refs, err := Refs(dir, builders)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(classes) == 0 && len(refs) == 0 {
+		return nil, nil, errors.New("no class defined or written in " + dir)
+	}
+	return classes, refs, nil
+}
+
 // moduleClasses is every class that a .css file of the module defines.
 func moduleClasses(dir string) ([]string, error) {
 	var out []string
@@ -160,15 +179,7 @@ func moduleClasses(dir string) ([]string, error) {
 		out = append(out, ParseSheet(string(src)).Defined...)
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	// A module with no sheet is a module that defines no class, which
-	// means the flag names the wrong module.
-	if len(out) == 0 {
-		return nil, errors.New("no class selectors in a .css file of " + dir)
-	}
-	return out, nil
+	return out, err
 }
 
 // moduleDir is the directory of a module the app requires: the replace

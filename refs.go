@@ -242,9 +242,10 @@ func scriptClasses(src string, builderRE *regexp.Regexp) []string {
 
 // goClasses reads the class names a Go file writes: the literals a
 // function named for a class returns, the literal a template local named
-// for a class holds, and the literal a variable or a field named for a
-// class is assigned. Handlers hand a class to a template one of those
-// ways.
+// for a class holds, the literal a variable or a field named for a
+// class is assigned, and the value of a const or a var named for a
+// class. Handlers hand a class to a template one of those ways, and a
+// package that writes markup names each class once as a const.
 func goClasses(path, src string) ([]string, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), path, src, 0)
 	if err != nil {
@@ -275,6 +276,15 @@ func goClasses(path, src string) ([]string, error) {
 				}
 			case *ast.Ident:
 				if isClassName(key.Name) {
+					out = append(out, words(lit.Value)...)
+				}
+			}
+		case *ast.ValueSpec:
+			for i, ident := range node.Names {
+				if i >= len(node.Values) || !isClassName(ident.Name) {
+					continue
+				}
+				if lit, ok := node.Values[i].(*ast.BasicLit); ok {
 					out = append(out, words(lit.Value)...)
 				}
 			}

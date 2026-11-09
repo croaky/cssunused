@@ -88,6 +88,27 @@ func TestRefsReadsBuildersTheAppNames(t *testing.T) {
 	is.True(!refs["grid-row"])
 }
 
+// A const or a var named for a class counts, at the top of a file and
+// in a function, so a package that writes its classes from named
+// values vouches for them. A const named for something else does not.
+func TestRefsReadsClassConstsAndVars(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	root := t.TempDir()
+
+	write(t, filepath.Join(root, "token.go"), "package token\n\n"+
+		"const (\n\tkeywordClass = \"k\"\n\tstringClass, numberClass = \"s\", \"m\"\n\tmaxDepth = \"deep\"\n)\n\n"+
+		"var diffClass = \"diff\"\n\n"+
+		"func f() { var lineClass = \"gu\"; _ = lineClass }\n")
+
+	refs, err := Refs(root, nil)
+	is.NoErr(err)
+	for _, c := range []string{"k", "s", "m", "diff", "gu"} {
+		is.True(refs[c])
+	}
+	is.True(!refs["deep"])
+}
+
 func TestRefsReadsNoClassOutOfProse(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -189,8 +210,8 @@ func TestReadSheetRejectsASheetWithNoClasses(t *testing.T) {
 	is.HasErr(err)
 }
 
-// A module's classes come from each of its .css files. A module with
-// none is an error, because the flag then names the wrong module.
+// A module's classes come from each of its .css files, and a module can
+// have none.
 func TestModuleClasses(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -203,6 +224,28 @@ func TestModuleClasses(t *testing.T) {
 	is.NoErr(err)
 	is.Eq(got, []string{"lib-tip"})
 
-	_, err = moduleClasses(t.TempDir())
+	got, err = moduleClasses(t.TempDir())
+	is.NoErr(err)
+	is.Eq(len(got), 0)
+}
+
+// A module with no sheet counts when its Go names a class, as a package
+// that writes classes and leaves the colors to the app does. A module
+// that neither defines nor names a class is an error, because the flag
+// then names the wrong module.
+func TestReadModule(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	writer := t.TempDir()
+	write(t, filepath.Join(writer, "html.go"), "package hl\n\nconst keywordClass = \"k\"\n")
+	classes, refs, err := readModule(writer, nil)
+	is.NoErr(err)
+	is.Eq(len(classes), 0)
+	is.True(refs["k"])
+
+	empty := t.TempDir()
+	write(t, filepath.Join(empty, "doc.go"), "package empty\n")
+	_, _, err = readModule(empty, nil)
 	is.HasErr(err)
 }

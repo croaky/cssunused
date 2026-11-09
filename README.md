@@ -26,12 +26,14 @@ go tool cssunused -sheet ui/css/app.css
 - `-root dir`: the directory of the app's templates, scripts, and Go.
   The default is the current directory.
 - `-module path`: a required Go module whose sheet the app serves, such
-  as `github.com/croaky/chart`. Repeat it for each module. The command
-  reads the module's `.css` files for the classes it defines, and its
-  views, scripts, and Go for the classes it writes. It finds the module
-  with `go list -m`, so the app's `go.mod` must require it. The lint
-  does not read a module's sheet, because the module keeps the rules of
-  its own repo.
+  as `github.com/croaky/chart`, or whose markup the app renders, such
+  as `github.com/croaky/highlight`. Repeat it for each module. The
+  command reads the module's `.css` files for the classes it defines,
+  and its views, scripts, and Go for the classes it writes. A module
+  with no sheet is fine when its Go writes a class; a module that does
+  neither is an error. The command finds the module with `go list -m`,
+  so the app's `go.mod` must require it. The lint does not read a
+  module's sheet, because the module keeps the rules of its own repo.
 - `-builder name`: a script function whose arguments hold a class, such
   as `div("row")`. Repeat it for each function.
 
@@ -59,8 +61,9 @@ element, not a word read out of a file.
   function.
 - `.go`: parsed, not scanned. A literal counts in two positions: the
   body of a function named for a class (`statusClass`), and the value
-  of a map key, struct field, or variable named for one
-  (`"status_dot_class": ...`, `mainClass := "no-nav"`).
+  of a map key, struct field, variable, or const named for one
+  (`"status_dot_class": ...`, `mainClass := "no-nav"`,
+  `const keywordClass = "k"`).
 
 In a git checkout, the scan reads the files git lists: the tracked
 files, and the untracked ones that `.gitignore` does not cover. A stale
