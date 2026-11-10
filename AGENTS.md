@@ -48,9 +48,9 @@ One `main` package at the repo root, so an app pins it with
 
 - `main.go`: the flags, and `run`, which reads each sheet and each
   module and returns the report.
-- `sheet.go`: `ParseSheet`, which resolves nesting and records what the
-  lint reads: the classes of each layer, rules outside a layer, IDs,
-  width media queries, and `!important`.
+- `sheet.go`: `ParseSheet`, which reads each rule's own selector and
+  records what the lint reads: the classes of each layer, rules outside
+  a layer, IDs, width media queries, and `!important`.
 - `refs.go`: `Refs`, which reads the class positions of templates,
   HTML, scripts, and Go.
 - `lint.go`: `Lint`, the rules of the standard.

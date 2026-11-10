@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/croaky/is"
@@ -103,6 +104,24 @@ func TestLintRejectsNonClassTopLevelInComponents(t *testing.T) {
 	})
 }
 
+// An :is() nest deeper than maxIsDepth fails, so the check of a
+// hostile selector stays linear in its length. A nest at the limit
+// still passes.
+func TestLintLimitsIsDepth(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	nest := func(depth int) string {
+		return strings.Repeat(":is(", depth) + ".card" + strings.Repeat(")", depth)
+	}
+	deep := nest(maxIsDepth + 1)
+	got := Lint(Sheet{ComponentsTopLevel: []string{nest(maxIsDepth), deep}}, nil)
+
+	is.Eq(got, []string{
+		"components: " + deep + ": a top-level rule in components must start with a class",
+	})
+}
+
 func TestLintRejectsAnElementNameInAReference(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -120,10 +139,10 @@ func TestLintRejectsAnIDSelector(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
 
-	got := Lint(Sheet{IDSelectors: []string{".card #card_title"}}, nil)
+	got := Lint(Sheet{IDSelectors: []string{"#card_title"}}, nil)
 
 	is.Eq(got, []string{
-		"id: .card #card_title: an ID outranks every class, so style a class instead",
+		"id: #card_title: an ID outranks every class, so style a class instead",
 	})
 }
 

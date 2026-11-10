@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/croaky/is"
@@ -165,7 +166,9 @@ func TestParseSheetIDSelectors(t *testing.T) {
 }
 `
 	// An attribute value and a hex color name no ID.
-	is.Eq(ParseSheet(src).IDSelectors, []string{"#main_tabs", ".card #card_title", ".rows:has(+ #more_rows)"})
+	// A nested rule is named by its own selector, as the sheet writes
+	// it, so grep finds it.
+	is.Eq(ParseSheet(src).IDSelectors, []string{"#main_tabs", "#card_title", ".rows:has(+ #more_rows)"})
 }
 
 // A media query that tests min-width or max-width is listed, at the top
@@ -222,14 +225,56 @@ func TestParseSheetImportant(t *testing.T) {
 @layer utilities {
   .hidden { display: none !important; }
   .flex { display: flex !important; }
+  .menu {
+    .hidden { display: block !important; }
+  }
 }
 
 .stray { color: blue !important; }
 `
+	// A nested rule is named by its own selector. A nested .hidden is
+	// not the .hidden utility, so it is listed.
 	is.Eq(ParseSheet(src).Important, []string{
 		".card { color: red !important }",
-		".card .title { margin: 0 !important }",
+		".title { margin: 0 !important }",
 		".flex { display: flex !important }",
+		".hidden { display: block !important }",
 		".stray { color: blue !important }",
 	})
+}
+
+// A @layer block nested in a style rule puts only the classes of its
+// own rules in that layer, not the classes of the parent rule.
+func TestParseSheetNestedLayer(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	const src = `
+@layer components {
+  .card {
+    @layer utilities {
+      .mt-1 { margin-top: 1rem; }
+    }
+  }
+}
+`
+	is.Eq(ParseSheet(src).Layers, map[string][]string{
+		"components": {"card"},
+		"utilities":  {"mt-1"},
+	})
+}
+
+// A deep nest with a selector list and & at each level parses in time
+// linear in the size of the sheet. An expansion of the nest into every
+// combination of its selectors would hold 3^40 selectors.
+func TestParseSheetDeepNestingIsLinear(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	const depth = 40
+	src := strings.Repeat(".a, & .b, & & {", depth) + "color: red !important;" + strings.Repeat("}", depth)
+	sheet := ParseSheet(src)
+
+	is.Eq(sheet.Defined, []string{"a", "b"})
+	is.Eq(sheet.Important, []string{".a, & .b, & & { color: red !important }"})
 }

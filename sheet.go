@@ -21,40 +21,52 @@ type Sheet struct {
 	// ComponentsTopLevel is each top-level rule in the components layer,
 	// in source order.
 	ComponentsTopLevel []string
-	// IDSelectors is each resolved selector that names an ID, in any
-	// layer, in source order. Only the rule that writes the ID counts,
-	// not each rule nested under it.
+	// IDSelectors is each selector that names an ID, in any layer, in
+	// source order. A nested rule gives its own selector, as the sheet
+	// writes it, not the selector of its parent too.
 	IDSelectors []string
 	// WidthMedia is the head of each @media rule that tests min-width
 	// or max-width, in source order.
 	WidthMedia []string
 	// Important is each !important declaration that the standard does
-	// not allow, with its selector, in source order. The standard allows
-	// one in the base layer and on the .hidden utility.
+	// not allow, with the own selector of its rule, in source order. The
+	// standard allows one in the base layer and on the top-level .hidden
+	// utility.
 	Important []string
 }
 
-// frame is one open block: the resolved selector list its children
-// resolve against, and the cascade layer it is in.
+// frame is one open block. sel is the own selector of the nearest
+// style rule, as the sheet writes it. inRule tells that a style rule
+// wraps the block. nested tells that the rule of sel is itself under
+// a style rule. keyframes tells that a @keyframes block wraps it.
 type frame struct {
-	sels  []string
-	layer string
+	sel       string
+	layer     string
+	inRule    bool
+	nested    bool
+	keyframes bool
 }
 
 // widthMediaRE matches a media query that tests a width with the old
 // min-width or max-width features.
 var widthMediaRE = regexp.MustCompile(`\b(?:min|max)-width\b`)
 
-// ParseSheet resolves nesting and collects the class names out of the
-// resolved selectors. It walks the source rather than matching lines
-// because a selector can span lines and a comment or a data-URI string
-// can contain any punctuation the walk cares about.
+// ParseSheet collects the class names out of the own selector of each
+// rule. It walks the source rather than matching lines because a
+// selector can span lines and a comment or a data-URI string can
+// contain any punctuation the walk cares about.
+//
+// It does not expand a nested selector against its parents. A parent's
+// classes are recorded at the parent, and & adds no class of its own.
+// An expansion into each combination of the selector lists grows
+// exponentially with the depth of the nest, so a small sheet could use
+// all the memory of the machine.
 func ParseSheet(src string) Sheet {
 	defined := map[string]bool{}
 	layers := map[string]map[string]bool{}
 	var out Sheet
 
-	stack := []frame{{sels: []string{""}}}
+	stack := []frame{{}}
 	var buf strings.Builder
 
 	// declaration reads the text in buf as a declaration of the open
@@ -65,11 +77,10 @@ func ParseSheet(src string) Sheet {
 			return
 		}
 		top := stack[len(stack)-1]
-		sel := strings.Join(top.sels, ", ")
-		if top.layer == "base" || (top.layer == "utilities" && sel == ".hidden") {
+		if top.layer == "base" || (top.layer == "utilities" && top.sel == ".hidden" && !top.nested) {
 			return
 		}
-		out.Important = append(out.Important, sel+" { "+decl+" }")
+		out.Important = append(out.Important, top.sel+" { "+decl+" }")
 	}
 
 	for i := 0; i < len(src); i++ {
@@ -98,17 +109,27 @@ func ParseSheet(src string) Sheet {
 			if strings.HasPrefix(head, "@media") && widthMediaRE.MatchString(head) {
 				out.WidthMedia = append(out.WidthMedia, head)
 			}
-			// A rule is top-level when no parent rule wraps it, so it
-			// resolves against the root's empty selector.
-			if layer == "components" && !strings.HasPrefix(head, "@") && slices.Equal(top.sels, []string{""}) {
+			next := top
+			next.layer = layer
+			isRule := head != "" && !strings.HasPrefix(head, "@") && !top.keyframes
+			// A rule is top-level when no parent rule wraps it.
+			if layer == "components" && isRule && !top.inRule {
 				out.ComponentsTopLevel = append(out.ComponentsTopLevel, head)
 			}
-			sels := resolve(top.sels, head)
-			for _, s := range sels {
-				if namesID(head) && namesID(s) {
-					out.IDSelectors = append(out.IDSelectors, s)
+			// A @keyframes block holds keyframe selectors (`from`,
+			// `50%`), which select no element. An at-rule such as
+			// @media sets no selector, so its block keeps the parent's.
+			switch {
+			case strings.HasPrefix(head, "@keyframes"):
+				next.keyframes = true
+			case isRule:
+				next = frame{sel: head, layer: layer, inRule: true, nested: top.inRule}
+				for _, s := range splitCommas(head) {
+					if namesID(s) {
+						out.IDSelectors = append(out.IDSelectors, strings.TrimSpace(s))
+					}
 				}
-				for _, cl := range classesIn(s) {
+				for _, cl := range classesIn(head) {
 					defined[cl] = true
 					if layer == "" {
 						continue
@@ -119,7 +140,7 @@ func ParseSheet(src string) Sheet {
 					layers[layer][cl] = true
 				}
 			}
-			stack = append(stack, frame{sels: sels, layer: layer})
+			stack = append(stack, next)
 			buf.Reset()
 		case c == '}':
 			declaration()
@@ -145,42 +166,6 @@ func ParseSheet(src string) Sheet {
 
 func sortedKeys(m map[string]bool) []string {
 	return slices.Sorted(maps.Keys(m))
-}
-
-// resolve expands one block's selector text against its parents. An
-// at-rule (@media, @font-face) sets no selector of its own, so its
-// children resolve against the same parents. A @keyframes block holds
-// keyframe selectors (`from`, `50%`), which select no element, so its
-// children resolve against none.
-func resolve(parents []string, text string) []string {
-	text = strings.TrimSpace(text)
-	if strings.HasPrefix(text, "@keyframes") {
-		return nil
-	}
-	if text == "" || strings.HasPrefix(text, "@") {
-		return parents
-	}
-	var out []string
-	for _, sel := range splitCommas(text) {
-		sel = strings.Join(strings.Fields(sel), " ")
-		if sel == "" {
-			continue
-		}
-		for _, p := range parents {
-			switch {
-			case strings.Contains(sel, "&"):
-				out = append(out, strings.ReplaceAll(sel, "&", p))
-			case p == "":
-				out = append(out, sel)
-			default:
-				out = append(out, p+" "+sel)
-			}
-		}
-	}
-	if len(out) == 0 {
-		return parents
-	}
-	return out
 }
 
 // splitCommas splits a selector list on the commas that separate
@@ -216,7 +201,7 @@ func namesID(sel string) bool {
 	return strings.Contains(attrRE.ReplaceAllString(sel, " "), "#")
 }
 
-// classesIn pulls class names out of a resolved selector. Attribute
+// classesIn pulls class names out of a selector. Attribute
 // selectors go first, because one can hold a dot that starts no class
 // (`[href$=".pdf"]`).
 func classesIn(sel string) []string {

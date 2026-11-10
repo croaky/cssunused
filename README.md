@@ -42,8 +42,9 @@ one.
 
 ## How it decides
 
-Defined: the class names in the resolved selectors of each sheet.
-Nesting resolves, so `.card-slim` under `.card` counts as both, and
+Defined: the class names in the selector of each rule of each sheet.
+The parse reads each rule's own selector and does not expand it
+against its parents. So `.card-slim` under `.card` counts as both, and
 `.drawer &` under `.card` counts as `.drawer` too.
 
 Referenced: a name read out of a position that puts a class on an
@@ -120,12 +121,17 @@ Each class follows the naming rule of its layer:
 In `components`, each selector of a top-level rule starts with a class
 (`.card`, `:is(.a, .b) .c`). A rule for a bare tag or an attribute goes
 in `base`. A nested rule is not checked, because it starts with its
-parent.
+parent. A nest of `:is()` more than eight deep fails, so the check
+stays linear in the length of the selector.
 
 A selector in any layer fails when it names an ID (`#main_tabs`). An
 ID outranks every class rule in its layer. A template keeps an ID that
 a script reads, and the sheet styles a class on the same element. A `#`
 inside an attribute value (`[href="#top"]`) names no ID.
+
+A line about a nested rule names the rule by its own selector, as the
+sheet writes it. An `id:` or `important:` line for `.title` under
+`.card` prints `.title`, not `.card .title`, so grep finds the rule.
 
 A rule outside every layer fails, with a class or without. It beats
 every layered rule, whatever its specificity, so one added below the
@@ -136,7 +142,8 @@ width as a range, `(width < 70em)`. `max-width: 70em` and
 `min-width: 70em` both match at 70em, so a screen that wide gets both
 layouts.
 
-`!important` fails outside the `base` layer and the `.hidden` utility.
+`!important` fails outside the `base` layer and the top-level `.hidden`
+utility.
 A later layer beats an earlier one without it. In `base` it beats a
 style that a browser extension writes inline, and `.hidden` must beat
 every display utility.

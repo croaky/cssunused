@@ -16,7 +16,7 @@ var componentRE = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:--[a-z0-9
 //   - components and print: a kebab-case name with an optional
 //     --modifier, and no __. An element is a nested selector under its
 //     block. Every top-level rule in components must start with a
-//     class.
+//     class. A nest of :is() deeper than maxIsDepth does not.
 //   - utilities: no __ and no --.
 //   - every other layer: no class at all.
 //
@@ -33,7 +33,11 @@ var componentRE = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:--[a-z0-9
 // layouts. And !important goes only in base, where it beats a style
 // that a browser extension writes inline, and on the .hidden utility,
 // which must beat every display utility. A later layer beats an earlier
-// one without it.
+// one without it. Only a top-level .hidden rule in utilities is that
+// utility.
+//
+// A line about a nested rule names it by its own selector, as the sheet
+// writes it, so grep finds it.
 func Lint(sheet Sheet, refs map[string]bool) []string {
 	var out []string
 	for c := range refs {
@@ -61,7 +65,7 @@ func Lint(sheet Sheet, refs map[string]bool) []string {
 	for _, head := range sheet.ComponentsTopLevel {
 		for _, sel := range splitCommas(head) {
 			sel = strings.TrimSpace(sel)
-			if !startsWithClass(sel) {
+			if !startsWithClass(sel, 0) {
 				out = append(out, fmt.Sprintf(
 					"components: %s: a top-level rule in components must start with a class", sel))
 			}
@@ -90,14 +94,19 @@ func Lint(sheet Sheet, refs map[string]bool) []string {
 	return out
 }
 
+// maxIsDepth is the deepest nest of :is() that startsWithClass reads.
+// Each level scans the rest of the selector again, so the limit keeps
+// the check linear in the length of the selector.
+const maxIsDepth = 8
+
 // startsWithClass reports whether the trimmed selector sel starts with
 // a class selector. An :is() selector passes when every selector inside
-// it starts with a class.
-func startsWithClass(sel string) bool {
+// it starts with a class. A nest of :is() deeper than maxIsDepth fails.
+func startsWithClass(sel string, depth int) bool {
 	if strings.HasPrefix(sel, ".") {
 		return true
 	}
-	if !strings.HasPrefix(sel, ":is(") {
+	if !strings.HasPrefix(sel, ":is(") || depth >= maxIsDepth {
 		return false
 	}
 	end := matchParen(sel, len(":is"))
@@ -105,7 +114,7 @@ func startsWithClass(sel string) bool {
 		return false
 	}
 	for _, arg := range splitCommas(sel[len(":is("):end]) {
-		if !startsWithClass(strings.TrimSpace(arg)) {
+		if !startsWithClass(strings.TrimSpace(arg), depth+1) {
 			return false
 		}
 	}
