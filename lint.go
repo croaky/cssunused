@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // componentRE matches a kebab-case name and an optional --modifier.
@@ -37,7 +38,8 @@ var componentRE = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:--[a-z0-9
 // utility.
 //
 // A line about a nested rule names it by its own selector, as the sheet
-// writes it, so grep finds it.
+// writes it, so grep finds it. An important: line and a layer line cut
+// the selector or the layer name at maxShown.
 func Lint(sheet Sheet, refs map[string]bool) []string {
 	var out []string
 	for c := range refs {
@@ -72,12 +74,13 @@ func Lint(sheet Sheet, refs map[string]bool) []string {
 		}
 	}
 	for layer, classes := range sheet.Layers {
+		shown := shorten(layer)
 		for _, c := range classes {
 			switch layer {
 			case "components", "print":
 				if !componentRE.MatchString(c) {
 					out = append(out, fmt.Sprintf(
-						"%s: .%s: a class here is kebab-case with an optional --modifier; nest an element under its block", layer, c))
+						"%s: .%s: a class here is kebab-case with an optional --modifier; nest an element under its block", shown, c))
 				}
 			case "utilities":
 				if strings.Contains(c, "__") || strings.Contains(c, "--") {
@@ -86,12 +89,32 @@ func Lint(sheet Sheet, refs map[string]bool) []string {
 				}
 			default:
 				out = append(out, fmt.Sprintf(
-					"%s: .%s: only the components, utilities, and print layers define classes", layer, c))
+					"%s: .%s: only the components, utilities, and print layers define classes", shown, c))
 			}
 		}
 	}
 	slices.Sort(out)
 	return out
+}
+
+// maxShown is the longest selector or layer name that a report line
+// repeats. A line for each !important declaration repeats the rule's
+// selector, and a line for each class repeats its layer name. Without
+// a cut, one long selector and many declarations make lines whose total
+// size grows with the square of the sheet.
+const maxShown = 80
+
+// shorten cuts s to maxShown bytes, at the start of a rune, and marks
+// the cut with "...".
+func shorten(s string) string {
+	if len(s) <= maxShown {
+		return s
+	}
+	n := maxShown
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "..."
 }
 
 // maxIsDepth is the deepest nest of :is() that startsWithClass reads.

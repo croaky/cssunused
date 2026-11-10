@@ -31,7 +31,7 @@ type Sheet struct {
 	// Important is each !important declaration that the standard does
 	// not allow, with the own selector of its rule, in source order. The
 	// standard allows one in the base layer and on the top-level .hidden
-	// utility.
+	// utility. A selector longer than maxShown is cut.
 	Important []string
 }
 
@@ -80,7 +80,7 @@ func ParseSheet(src string) Sheet {
 		if top.layer == "base" || (top.layer == "utilities" && top.sel == ".hidden" && !top.nested) {
 			return
 		}
-		out.Important = append(out.Important, top.sel+" { "+decl+" }")
+		out.Important = append(out.Important, shorten(top.sel)+" { "+decl+" }")
 	}
 
 	for i := 0; i < len(src); i++ {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -156,6 +157,56 @@ func TestLintRejectsAWidthMediaQuery(t *testing.T) {
 
 	is.Eq(got, []string{
 		"media: @media (max-width: 48em): write the width as a range, such as (width < 70em)",
+	})
+}
+
+// An important: line cuts a selector longer than maxShown, so each line
+// stays short however long the rule's selector is.
+func TestParseSheetCutsALongSelectorInImportant(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	sel := strings.TrimSuffix(strings.Repeat(".u, ", 40), ", ")
+	sheet := ParseSheet("@layer utilities { " + sel + " { color: red !important; } }")
+
+	is.Eq(sheet.Important, []string{sel[:maxShown] + "... { color: red !important }"})
+}
+
+// One rule with a long selector and many !important declarations gives
+// report lines whose total size grows linearly with the sheet, not with
+// the selector length times the declaration count.
+func TestLintImportantLinesStayLinear(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	var sel strings.Builder
+	for i := range 2000 {
+		if i > 0 {
+			sel.WriteString(", ")
+		}
+		sel.WriteString(".u")
+		sel.WriteString(strconv.Itoa(i))
+	}
+	src := "@layer utilities { " + sel.String() + " {" + strings.Repeat("a:b !important;", 5000) + "} }"
+
+	total := 0
+	for _, line := range Lint(ParseSheet(src), nil) {
+		total += len(line)
+	}
+	is.True(total < 20*len(src))
+}
+
+// A layer line cuts a layer name longer than maxShown, so a long name
+// is not repeated whole once for each class of the layer.
+func TestLintCutsALongLayerName(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	layer := strings.Repeat("x", 200)
+	got := Lint(Sheet{Layers: map[string][]string{layer: {"a"}}}, nil)
+
+	is.Eq(got, []string{
+		layer[:maxShown] + "...: .a: only the components, utilities, and print layers define classes",
 	})
 }
 

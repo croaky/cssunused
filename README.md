@@ -138,6 +138,12 @@ A line about a nested rule names the rule by its own selector, as the
 sheet writes it. An `id:` or `important:` line for `.title` under
 `.card` prints `.title`, not `.card .title`, so grep finds the rule.
 
+An `important:` line prints at most the first 80 bytes of the rule's
+selector, then `...`. A layer line does the same with the layer name.
+One such line comes for each declaration or each class, so a long
+selector printed whole on each line would make output that grows with
+the square of the sheet.
+
 A rule outside every layer fails, with a class or without. It beats
 every layered rule, whatever its specificity, so one added below the
 layers would override the utilities.
