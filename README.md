@@ -65,12 +65,19 @@ element, not a word read out of a file.
   (`"status_dot_class": ...`, `mainClass := "no-nav"`,
   `const keywordClass = "k"`).
 
-In a git checkout, the scan reads the files git lists: the tracked
-files, and the untracked ones that `.gitignore` does not cover. A stale
-bundle in an ignored build directory names the classes of an old
-version of the app, so it vouches for nothing. Outside a checkout, such
-as a module in the module cache, the scan reads every file. Either way
-it skips `.git`, `node_modules`, `testdata`, and `vendor`.
+When `-root` holds a `.git` entry, the scan reads the files git lists:
+the tracked files, and the untracked ones that `.gitignore` does not
+cover. A stale bundle in an ignored build directory names the classes
+of an old version of the app, so it vouches for nothing. If git fails
+there, the run fails. A `-root` with no `.git` entry, such as a
+subdirectory of a checkout, and each `-module` directory get a read of
+every file, with no git. Either way the scan skips `.git`,
+`node_modules`, `testdata`, and `vendor`.
+
+git starts only in a `-root` that holds a `.git` entry. git reads a
+repository config from the directory it starts in, and a config can
+name a program that git runs. A change cannot add a `.git` entry, so
+the files of the change under check cannot supply that config.
 
 An empty result from the parse of a sheet is an error, not a pass: it
 means the sheet moved or the parse broke. A Go file the parser cannot

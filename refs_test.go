@@ -151,6 +151,73 @@ func TestRefsReadsTheFilesGitLists(t *testing.T) {
 	is.True(!refs["old__name"])
 }
 
+// plantRepo writes the files that make dir a repository to git: HEAD,
+// objects, refs, and a config whose core.fsmonitor helper writes a
+// marker file. A change or a module zip can hold each of these files.
+// It returns the path of the marker.
+func plantRepo(t *testing.T, dir string) string {
+	t.Helper()
+	marker := filepath.Join(t.TempDir(), "helper-ran")
+	helper := filepath.Join(t.TempDir(), "helper.sh")
+	write(t, helper, "#!/bin/sh\ntouch '"+marker+"'\n")
+	is.New(t).NoErr(os.Chmod(helper, 0o755))
+	write(t, filepath.Join(dir, "HEAD"), "ref: refs/heads/main\n")
+	write(t, filepath.Join(dir, "objects", "info", "packs"), "")
+	write(t, filepath.Join(dir, "refs", "heads", ".keep"), "")
+	write(t, filepath.Join(dir, "config"),
+		"[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = "+helper+"\n")
+	return marker
+}
+
+// A root with no .git entry is not a checkout, so git does not start
+// there, whatever repository its files make up. Every file counts.
+func TestRefsStartsNoGitOutsideACheckout(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	root := t.TempDir()
+
+	marker := plantRepo(t, root)
+	write(t, filepath.Join(root, "app.ts"), "el.classList.add(\"walked\");\n")
+
+	refs, err := Refs(root, nil)
+	is.NoErr(err)
+	is.True(refs["walked"])
+	_, err = os.Stat(marker)
+	is.True(os.IsNotExist(err))
+}
+
+// A module directory is never a checkout of the app, so git does not
+// start there, even when the module holds a .git entry.
+func TestReadModuleStartsNoGit(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	dir := t.TempDir()
+
+	marker := plantRepo(t, dir)
+	write(t, filepath.Join(dir, ".git"), "gitdir: .\n")
+	write(t, filepath.Join(dir, "html.go"), "package hl\n\nconst keywordClass = \"k\"\n")
+
+	_, refs, err := readModule(dir, nil)
+	is.NoErr(err)
+	is.True(refs["k"])
+	_, err = os.Stat(marker)
+	is.True(os.IsNotExist(err))
+}
+
+// In a checkout, a git failure is an error. A walk in its place would
+// read the ignored build output that the git list leaves out.
+func TestRefsRejectsACheckoutGitCannotList(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	root := t.TempDir()
+
+	write(t, filepath.Join(root, ".git"), "")
+	write(t, filepath.Join(root, "app.ts"), "el.classList.add(\"card\");\n")
+
+	_, err := Refs(root, nil)
+	is.HasErr(err)
+}
+
 func TestRefsRejectsGoItCannotParse(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

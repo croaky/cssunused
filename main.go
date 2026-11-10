@@ -144,12 +144,20 @@ func readSheet(path string) (Sheet, error) {
 // the colors to each app, and the app's sheet styles the classes the
 // package writes. But a module that neither defines nor writes a class
 // is an error, because the flag then names the wrong module.
+//
+// It reads every file of the module and starts no git. The directory is
+// a copy in the module cache, or a replace target that the app's go.mod
+// names, so the files of the change under check can choose it.
 func readModule(dir string, builders []string) ([]string, map[string]bool, error) {
 	classes, err := moduleClasses(dir)
 	if err != nil {
 		return nil, nil, err
 	}
-	refs, err := Refs(dir, builders)
+	paths, err := walkFiles(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	refs, err := readRefs(paths, builders)
 	if err != nil {
 		return nil, nil, err
 	}

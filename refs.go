@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -39,11 +40,16 @@ var skipDirs = map[string]bool{
 // that returns whole literals, rather than widen the scan until nothing
 // can be reported.
 func Refs(root string, builders []string) (map[string]bool, error) {
-	builderRE := builderPattern(builders)
 	paths, err := sourceFiles(root)
 	if err != nil {
 		return nil, err
 	}
+	return readRefs(paths, builders)
+}
+
+// readRefs collects the class names that the files at paths write.
+func readRefs(paths, builders []string) (map[string]bool, error) {
+	builderRE := builderPattern(builders)
 	out := map[string]bool{}
 	for _, path := range paths {
 		ext := filepath.Ext(path)
@@ -81,29 +87,44 @@ func Refs(root string, builders []string) (map[string]bool, error) {
 
 // sourceFiles lists the files under root that can name a class.
 //
-// In a git checkout it lists what git does: the tracked files and the
-// untracked ones that .gitignore does not cover. A build writes its
-// output to an ignored directory, and a stale bundle there still names
-// the classes of an old version of the app. A new file counts before
-// git add, so a check run before a commit sees it. Outside a checkout,
-// such as a module in the module cache, it lists every file.
+// When root holds a .git entry, it lists what git does: the tracked
+// files and the untracked ones that .gitignore does not cover. A build
+// writes its output to an ignored directory, and a stale bundle there
+// still names the classes of an old version of the app. A new file
+// counts before git add, so a check run before a commit sees it.
+// Otherwise it lists every file.
+//
+// git starts only when root holds a .git entry. git looks for that entry
+// before it reads a repository config out of the files of root. Those
+// files come from the change under check, which cannot add a .git entry,
+// because git does not track one. A config there can name a helper,
+// such as core.fsmonitor, that git runs.
 func sourceFiles(root string) ([]string, error) {
+	if _, err := os.Lstat(filepath.Join(root, ".git")); err != nil {
+		return walkFiles(root)
+	}
 	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	cmd.Dir = root
-	if out, err := cmd.Output(); err == nil {
-		var paths []string
-		for rel := range bytes.SplitSeq(bytes.TrimSuffix(out, []byte{0}), []byte{0}) {
-			if len(rel) == 0 || inSkipDir(string(rel)) {
-				continue
-			}
-			path := filepath.Join(root, string(rel))
-			// git lists a tracked file that the work tree deleted.
-			if _, err := os.Stat(path); err == nil {
-				paths = append(paths, path)
-			}
-		}
-		return paths, nil
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files in %s: %w", root, err)
 	}
+	var paths []string
+	for rel := range bytes.SplitSeq(bytes.TrimSuffix(out, []byte{0}), []byte{0}) {
+		if len(rel) == 0 || inSkipDir(string(rel)) {
+			continue
+		}
+		path := filepath.Join(root, string(rel))
+		// git lists a tracked file that the work tree deleted.
+		if _, err := os.Stat(path); err == nil {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+// walkFiles lists every file under root outside skipDirs.
+func walkFiles(root string) ([]string, error) {
 	var paths []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
