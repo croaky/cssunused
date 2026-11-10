@@ -122,8 +122,17 @@ func run(root string, sheets, modules, builders []string) ([]string, error) {
 	return append(out, violations...), nil
 }
 
-// readSheet parses the stylesheet at path.
+// readSheet parses the stylesheet at path. A sheet that is not a
+// regular file is an error. The change under check can replace the
+// sheet with a symlink to a file outside the checkout or to a device.
 func readSheet(path string) (Sheet, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return Sheet{}, err
+	}
+	if !fi.Mode().IsRegular() {
+		return Sheet{}, fmt.Errorf("%s is not a regular file", path)
+	}
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return Sheet{}, err
@@ -168,6 +177,7 @@ func readModule(dir string, builders []string) ([]string, map[string]bool, error
 }
 
 // moduleClasses is every class that a .css file of the module defines.
+// It reads only regular files, as walkFiles does.
 func moduleClasses(dir string) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -177,7 +187,7 @@ func moduleClasses(dir string) ([]string, error) {
 		if d.IsDir() && skipDirs[d.Name()] {
 			return filepath.SkipDir
 		}
-		if d.IsDir() || filepath.Ext(path) != ".css" {
+		if !d.Type().IsRegular() || filepath.Ext(path) != ".css" {
 			return nil
 		}
 		src, err := os.ReadFile(path)

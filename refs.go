@@ -115,15 +115,21 @@ func sourceFiles(root string) ([]string, error) {
 			continue
 		}
 		path := filepath.Join(root, string(rel))
-		// git lists a tracked file that the work tree deleted.
-		if _, err := os.Stat(path); err == nil {
+		// git lists a tracked file that the work tree deleted, and a
+		// symlink, which Lstat does not follow.
+		if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() {
 			paths = append(paths, path)
 		}
 	}
 	return paths, nil
 }
 
-// walkFiles lists every file under root outside skipDirs.
+// walkFiles lists every regular file under root outside skipDirs.
+//
+// A listing skips a symlink, a device, a FIFO, and a socket, here and in
+// sourceFiles. The change under check can hold a symlink, since git
+// stores its target as content. A read through it would read a file
+// outside the root, or a device that never ends.
 func walkFiles(root string) ([]string, error) {
 	var paths []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -133,7 +139,7 @@ func walkFiles(root string) ([]string, error) {
 		if d.IsDir() && skipDirs[d.Name()] {
 			return filepath.SkipDir
 		}
-		if !d.IsDir() {
+		if d.Type().IsRegular() {
 			paths = append(paths, path)
 		}
 		return nil

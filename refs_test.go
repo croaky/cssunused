@@ -218,6 +218,70 @@ func TestRefsRejectsACheckoutGitCannotList(t *testing.T) {
 	is.HasErr(err)
 }
 
+// outsideLink writes a file outside every scanned directory, and a
+// symlink to it at link. The change under check can hold the symlink,
+// since git stores its target as content.
+func outsideLink(t *testing.T, link, content string) {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "secret")
+	write(t, target, content)
+	is := is.New(t)
+	is.NoErr(os.MkdirAll(filepath.Dir(link), 0o755))
+	is.NoErr(os.Symlink(target, link))
+}
+
+// A symlink is not read, in the walk and in the files git lists, so a
+// file outside the root vouches for no class.
+func TestRefsReadsNoSymlink(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	walked := t.TempDir()
+	outsideLink(t, filepath.Join(walked, "app.ts"), "el.classList.add(\"secret\");\n")
+	refs, err := Refs(walked, nil)
+	is.NoErr(err)
+	is.True(!refs["secret"])
+
+	listed := t.TempDir()
+	git := exec.Command("git", "init", "-q")
+	git.Dir = listed
+	is.NoErr(git.Run())
+	outsideLink(t, filepath.Join(listed, "app.ts"), "el.classList.add(\"secret\");\n")
+	refs, err = Refs(listed, nil)
+	is.NoErr(err)
+	is.True(!refs["secret"])
+}
+
+// A symlink in a module is not read, as a sheet or as a source file.
+func TestReadModuleReadsNoSymlink(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	dir := t.TempDir()
+
+	write(t, filepath.Join(dir, "lib.css"), "@layer components { .lib-tip { color: red; } }\n")
+	outsideLink(t, filepath.Join(dir, "leak.css"), ".leak { color: red; }\n")
+	outsideLink(t, filepath.Join(dir, "leak.go"), "package leak\n\nconst leakClass = \"leak-ref\"\n")
+
+	classes, refs, err := readModule(dir, nil)
+	is.NoErr(err)
+	is.Eq(classes, []string{"lib-tip"})
+	is.True(!refs["leak-ref"])
+}
+
+// A -sheet that is a symlink is an error, because the change under
+// check can replace the sheet with a link to a device or to a file
+// outside the checkout.
+func TestReadSheetRejectsASymlink(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	path := filepath.Join(t.TempDir(), "app.css")
+
+	outsideLink(t, path, ".card { color: red; }\n")
+
+	_, err := readSheet(path)
+	is.HasErr(err)
+}
+
 func TestRefsRejectsGoItCannotParse(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

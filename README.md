@@ -23,6 +23,7 @@ go tool cssunused -sheet ui/css/app.css
 ## Flags
 
 - `-sheet path`: an app stylesheet to check. Repeat it for each sheet.
+  The path names a regular file. A symlink is an error.
 - `-root dir`: the directory of the app's templates, scripts, and Go.
   The default is the current directory.
 - `-module path`: a required Go module whose sheet the app serves, such
@@ -74,6 +75,10 @@ there, the run fails. A `-root` with no `.git` entry, such as a
 subdirectory of a checkout, and each `-module` directory get a read of
 every file, with no git. Either way the scan skips `.git`,
 `node_modules`, `testdata`, and `vendor`.
+
+The scan reads only regular files. It skips a symlink, a device, a
+FIFO, and a socket. A change can hold a symlink, and a read through it
+would read a file outside the checkout, or a device that never ends.
 
 git starts only in a `-root` that holds a `.git` entry. git reads a
 repository config from the directory it starts in, and a config can
