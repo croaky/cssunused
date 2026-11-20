@@ -27,7 +27,12 @@ go tool cssunused -sheet ui/css/app.css
   the path or a path outside `-root` is an error.
 - `-root dir`: the directory of the app's templates, scripts, and Go.
   The default is the current directory. A `-root` that is a symlink is
-  an error.
+  an error. When `-root` lies below the working directory (relative or
+  absolute), a symlink in any component below the working directory is
+  an error. When `-root` starts with `..`, a symlink in any component
+  below the leading `..` ancestor is an error. For an absolute `-root`
+  outside the working directory, the tool checks only the final
+  component, so system symlinks such as `/var` still work.
 - `-module path`: a required Go module whose sheet the app serves, such
   as `github.com/croaky/chart`, or whose markup the app renders, such as
   `github.com/croaky/highlight`. Repeat it for each module. The command

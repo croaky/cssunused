@@ -51,29 +51,33 @@ func Refs(root string, builders []string) (map[string]bool, error) {
 }
 
 // openRoot opens dir as an os.Root. A dir that is a symlink fails,
-// because os.OpenRoot follows symlinks in the root path. When dir is a
-// local relative path, each path component from the working directory
-// must also not be a symlink.
+// because os.OpenRoot follows symlinks in the root path. When dir lies
+// below the working directory (relative or absolute), each path
+// component below the working directory must not be a symlink. When dir
+// starts with "..", each component below the leading ".." ancestor must
+// not be a symlink.
 func openRoot(dir string) (*os.Root, error) {
 	clean := filepath.Clean(dir)
-	if filepath.IsLocal(clean) && clean != "." {
-		cwd, err := os.OpenRoot(".")
-		if err != nil {
-			return nil, err
+	if filepath.IsLocal(clean) {
+		if clean == "." {
+			return os.OpenRoot(".")
 		}
-		defer cwd.Close()
-		var prefix string
-		for part := range strings.SplitSeq(filepath.ToSlash(clean), "/") {
-			prefix = filepath.Join(prefix, part)
-			fi, err := cwd.Lstat(prefix)
-			if err != nil {
-				return nil, err
+		return openNoSymlinks(".", clean)
+	}
+	if !filepath.IsAbs(clean) {
+		base, rest := splitDotDot(clean)
+		if rest != "" {
+			if baseAbs, err := filepath.Abs(base); err == nil && baseAbs != filepath.Dir(baseAbs) {
+				return openNoSymlinks(base, rest)
 			}
-			if fi.Mode()&os.ModeSymlink != 0 {
-				return nil, fmt.Errorf("%s is a symlink", prefix)
+			if abs, err := filepath.Abs(clean); err == nil {
+				if wdRest, ok := relBelowWD(abs); ok && wdRest != "" {
+					return openNoSymlinks(".", wdRest)
+				}
 			}
 		}
-		return cwd.OpenRoot(clean)
+	} else if rest, ok := relBelowWD(clean); ok && rest != "" {
+		return openNoSymlinks(".", rest)
 	}
 	fi, err := os.Lstat(clean)
 	if err != nil {
@@ -83,6 +87,73 @@ func openRoot(dir string) (*os.Root, error) {
 		return nil, fmt.Errorf("%s is a symlink", dir)
 	}
 	return os.OpenRoot(clean)
+}
+
+// openNoSymlinks opens rel under base after checking that no component
+// of rel is a symlink.
+func openNoSymlinks(base, rel string) (*os.Root, error) {
+	r, err := os.OpenRoot(base)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	var prefix string
+	for part := range strings.SplitSeq(filepath.ToSlash(rel), "/") {
+		prefix = filepath.Join(prefix, part)
+		fi, err := r.Lstat(prefix)
+		if err != nil {
+			return nil, err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("%s is a symlink", filepath.Join(base, prefix))
+		}
+	}
+	return r.OpenRoot(rel)
+}
+
+// splitDotDot splits a cleaned relative path into its leading ".."
+// segments and the remaining path below them.
+func splitDotDot(clean string) (string, string) {
+	parts := strings.Split(filepath.ToSlash(clean), "/")
+	i := 0
+	for i < len(parts) && parts[i] == ".." {
+		i++
+	}
+	return filepath.FromSlash(strings.Join(parts[:i], "/")),
+		filepath.FromSlash(strings.Join(parts[i:], "/"))
+}
+
+// relBelowWD reports whether clean, a cleaned absolute path, lies at or
+// below the working directory, and returns the relative path below it.
+// It compares file identity so a system symlink above the working
+// directory (such as /var on macOS) does not hide the match.
+func relBelowWD(clean string) (string, bool) {
+	wdInfo, err := os.Stat(".")
+	if err != nil {
+		return "", false
+	}
+	vol := filepath.VolumeName(clean)
+	afterVol := strings.TrimPrefix(clean, vol)
+	trimmed := strings.TrimPrefix(filepath.ToSlash(afterVol), "/")
+	prefix := vol + string(filepath.Separator)
+	if fi, err := os.Stat(prefix); err == nil && os.SameFile(wdInfo, fi) {
+		return filepath.FromSlash(trimmed), true
+	}
+	if trimmed == "" {
+		return "", false
+	}
+	parts := strings.Split(trimmed, "/")
+	for i, part := range parts {
+		prefix = filepath.Join(prefix, part)
+		fi, err := os.Stat(prefix)
+		if err != nil {
+			return "", false
+		}
+		if os.SameFile(wdInfo, fi) {
+			return filepath.FromSlash(strings.Join(parts[i+1:], "/")), true
+		}
+	}
+	return "", false
 }
 
 // readRegularFile opens path through r, confirms on the opened file
