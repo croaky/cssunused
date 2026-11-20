@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -94,17 +95,39 @@ func readRefs(paths, builders []string) (map[string]bool, error) {
 // counts before git add, so a check run before a commit sees it.
 // Otherwise it lists every file.
 //
-// git starts only when root holds a .git entry. git looks for that entry
-// before it reads a repository config out of the files of root. Those
-// files come from the change under check, which cannot add a .git entry,
-// because git does not track one. A config there can name a helper,
-// such as core.fsmonitor, that git runs.
+// git reads its repository only from the .git entry of root, and only
+// when that entry is a directory or a regular file (a gitfile). The
+// files of root come from the change under check, which can hold the
+// HEAD, objects, refs, and config of a bare repository. A config there
+// can name a helper, such as core.fsmonitor, that git runs. So git gets
+// an explicit --git-dir and does no discovery. When git rejects the
+// .git entry, such as an empty directory, git fails and the run fails.
+// git does not fall back to root as a bare repository.
 func sourceFiles(root string) ([]string, error) {
-	if _, err := os.Lstat(filepath.Join(root, ".git")); err != nil {
+	// git reads a relative --git-dir from its own directory, and
+	// GIT_CEILING_DIRECTORIES ignores a relative path.
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	gitDir := filepath.Join(abs, ".git")
+	fi, err := os.Lstat(gitDir)
+	if errors.Is(err, fs.ErrNotExist) {
 		return walkFiles(root)
 	}
-	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	cmd.Dir = root
+	if err != nil {
+		return nil, err
+	}
+	if !fi.IsDir() && !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a directory or a regular file", gitDir)
+	}
+	// safe.bareRepository is read only from protected config, and -c is
+	// protected. It needs git 2.38 or later.
+	cmd := exec.Command("git", "-c", "safe.bareRepository=explicit",
+		"--git-dir="+gitDir, "--work-tree="+abs,
+		"ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	cmd.Dir = abs
+	cmd.Env = append(os.Environ(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(abs))
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git ls-files in %s: %w", root, err)

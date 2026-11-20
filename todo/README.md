@@ -5,8 +5,6 @@ which the changes land. The commit that finishes a change deletes its
 file. The next file takes a number past the highest one ever used, so
 a number in an old commit names one plan only.
 
-- `003-git-uses-only-the-checked-git-dir.md`: `security:` git reads
-  its repository only from the `.git` entry of `-root`.
 - `004-reads-go-through-os-root.md`: `security:` every read stays in
   `-root` or in the module cache.
 - `005-layer-set-once-per-block.md`: `security:` `ParseSheet` finds
@@ -14,10 +12,8 @@ a number in an old commit names one plan only.
 - `006-threat-model-in-readme.md`: `doc:` the threat model moves to
   `README.md`.
 
-Land 003 first, because it fixes the high finding and is small. 003
-and 004 both change the `sourceFiles` Go function, so 004 rebases on
-003. 005 changes only `sheet.go`, and 006 changes only docs, so each
-can land in parallel with the others.
+005 changes only `sheet.go`, and 006 changes only docs, so each can
+land in parallel with the others.
 
 Every change runs the `Checkfile` list before it opens.
 
@@ -38,12 +34,6 @@ Each finding below was scanned at 0bf0335. A probe against a build of
 that commit, with git 2.56.1 on APFS, proved each path, except where a
 line says otherwise.
 
-- `find_018ziUstuhpmggCYtafTxncq` (high): `sourceFiles` proves that
-  `root/.git` exists, not that git uses it. With an empty `.git`
-  directory or a dangling `.git` symlink, git reads `root` as a bare
-  repository, and a planted `core.fsmonitor` helper runs. A FIFO
-  `.git` fails safely. This is a sibling of the fix in 6e93b0d. Fix:
-  `003-git-uses-only-the-checked-git-dir.md`.
 - `find_019yhBgMRaUinUardifzkzTM` (low): a `-root` that is a symlink
   moves the git listing to another repository. The probe printed a
   class of that repository. The second path, a case-colliding

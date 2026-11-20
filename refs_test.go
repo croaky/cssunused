@@ -149,6 +149,16 @@ func TestRefsReadsTheFilesGitLists(t *testing.T) {
 	is.NoErr(err)
 	is.True(refs["new-card"])
 	is.True(!refs["old__name"])
+
+	// The default -root is ".", a relative path. git gets the same list.
+	wd, err := os.Getwd()
+	is.NoErr(err)
+	rel, err := filepath.Rel(wd, root)
+	is.NoErr(err)
+	refs, err = Refs(rel, nil)
+	is.NoErr(err)
+	is.True(refs["new-card"])
+	is.True(!refs["old__name"])
 }
 
 // plantRepo writes the files that make dir a repository to git: HEAD,
@@ -184,6 +194,64 @@ func TestRefsStartsNoGitOutsideACheckout(t *testing.T) {
 	is.True(refs["walked"])
 	_, err = os.Stat(marker)
 	is.True(os.IsNotExist(err))
+}
+
+// A .git entry that git rejects fails the run, and git does not read
+// root as a bare repository. The change under check can supply the
+// HEAD, objects, refs, and config of that repository, and a
+// core.fsmonitor key in the config names a program that git runs.
+func TestRefsStartsNoGitOnARejectedGitEntry(t *testing.T) {
+	t.Parallel()
+	for name, plantGit := range map[string]func(t *testing.T, path string){
+		"empty directory": func(t *testing.T, path string) {
+			is.New(t).NoErr(os.Mkdir(path, 0o755))
+		},
+		"dangling symlink": func(t *testing.T, path string) {
+			is.New(t).NoErr(os.Symlink(filepath.Join(t.TempDir(), "gone"), path))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			is := is.New(t)
+			root := t.TempDir()
+
+			marker := plantRepo(t, root)
+			plantGit(t, filepath.Join(root, ".git"))
+			write(t, filepath.Join(root, "app.ts"), "el.classList.add(\"card\");\n")
+
+			_, err := Refs(root, nil)
+			is.HasErr(err)
+			_, err = os.Stat(marker)
+			is.True(os.IsNotExist(err))
+		})
+	}
+}
+
+// A worktree from git worktree add holds a .git file, not a directory.
+// The run lists the files that git lists there, as in a clone.
+func TestRefsReadsTheFilesGitListsInAWorktree(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	main := t.TempDir()
+	worktree := filepath.Join(t.TempDir(), "wt")
+
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"worktree", "add", "-q", worktree},
+	} {
+		git := exec.Command("git", args...)
+		git.Dir = main
+		is.NoErr(git.Run())
+	}
+	write(t, filepath.Join(worktree, ".gitignore"), "public/\n")
+	write(t, filepath.Join(worktree, "public", "app-1.js"), "el.classList.add(\"old__name\");\n")
+	write(t, filepath.Join(worktree, "new.hml"), ".new-card\n")
+
+	refs, err := Refs(worktree, nil)
+	is.NoErr(err)
+	is.True(refs["new-card"])
+	is.True(!refs["old__name"])
 }
 
 // A module directory is never a checkout of the app, so git does not

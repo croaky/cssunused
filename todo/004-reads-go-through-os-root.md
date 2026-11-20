@@ -5,7 +5,9 @@ Title: `security: read files only through os.Root`
 Findings: `find_019yhBgMRaUinUardifzkzTM`,
 `find_01MtCdmmcqwdTQh9jqaVFr9W`, and `find_0188ZgZdXn7g7dbYmJZTXwZ1`.
 
-Land this after 003, because both change `sourceFiles`.
+Plan 003 landed first. It made `sourceFiles` start git with an
+explicit `--git-dir` on the `.git` entry of an absolute `-root`. Keep
+that call when `sourceFiles` moves to `os.Root`.
 
 ## Need
 
@@ -88,4 +90,6 @@ change below covers it whatever git does.
 Tag a release, and bump each app that pins cssunused in the same
 sitting. Run each app's check against the tree before the tag. Then
 run `claudesec resolve --reason fixed` for each of the three IDs, with
-a note that names the commit.
+a note that names the commit. The same tag ships the fix of 003, so
+also resolve `find_018ziUstuhpmggCYtafTxncq` with a note that names
+the 003 commit.

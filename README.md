@@ -80,10 +80,15 @@ The scan reads only regular files. It skips a symlink, a device, a
 FIFO, and a socket. A change can hold a symlink, and a read through it
 would read a file outside the checkout, or a device that never ends.
 
-git starts only in a `-root` that holds a `.git` entry. git reads a
-repository config from the directory it starts in, and a config can
-name a program that git runs. A change cannot add a `.git` entry, so
-the files of the change under check cannot supply that config.
+git starts only in a `-root` that holds a `.git` entry, and only when
+that entry is a directory or a regular file (a gitfile, as in a
+worktree). Any other `.git` entry, such as a symlink, fails the run.
+git gets that entry as an explicit `--git-dir`, so it does no search
+of its own. A change can hold the files of a bare repository in
+`-root`, and its config can name a program that git runs. When git
+rejects the `.git` entry, such as an empty directory, the run fails.
+git does not read `-root` as a bare repository. This needs git 2.38 or
+later.
 
 An empty result from the parse of a sheet is an error, not a pass: it
 means the sheet moved or the parse broke. A Go file the parser cannot
