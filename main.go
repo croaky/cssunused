@@ -25,7 +25,7 @@
 //
 // Usage:
 //
-//	cssunused -sheet ui/css/app.css [-sheet ...] [-root .] [-module path ...] [-builder name ...]
+//	cssunused -sheet ui/css/app.css [-sheet ...] [-root .] [-module path ...] [-module-dir dir ...] [-builder name ...]
 package main
 
 import (
@@ -55,17 +55,18 @@ func (l *list) Set(v string) error {
 func main() {
 	log.SetFlags(0)
 
-	var sheets, modules, builders list
+	var sheets, modules, moduleDirs, builders list
 	root := flag.String("root", ".", "directory of the app's templates, scripts, and Go")
 	flag.Var(&sheets, "sheet", "an app stylesheet to check; repeat for each sheet")
 	flag.Var(&modules, "module", "a required Go module whose sheet the app serves; repeat for each module")
+	flag.Var(&moduleDirs, "module-dir", "an outside directory that a -module replace may read; repeat for each directory")
 	flag.Var(&builders, "builder", "a script function whose arguments hold a class; repeat for each")
 	flag.Parse()
 	if len(sheets) == 0 {
 		log.Fatal("cssunused: name one or more -sheet files")
 	}
 
-	issues, err := run(*root, sheets, modules, builders)
+	issues, err := run(*root, sheets, modules, moduleDirs, builders)
 	if err != nil {
 		log.Fatalf("cssunused: %v", err)
 	}
@@ -80,8 +81,14 @@ func main() {
 
 // run returns one line for each unused class and each lint violation,
 // unused classes first.
-func run(root string, sheets, modules, builders []string) ([]string, error) {
-	refs, err := Refs(root, builders)
+func run(root string, sheets, modules, moduleDirs, builders []string) ([]string, error) {
+	r, err := openRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	refs, err := refsInRoot(r, root, builders)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +99,11 @@ func run(root string, sheets, modules, builders []string) ([]string, error) {
 		violations = append(violations, "lint: "+v)
 	}
 	for _, path := range sheets {
-		sheet, err := readSheet(path)
+		rel, err := relInRoot(root, path)
+		if err != nil {
+			return nil, err
+		}
+		sheet, err := readSheet(r, rel, path)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +113,7 @@ func run(root string, sheets, modules, builders []string) ([]string, error) {
 		}
 	}
 	for _, module := range modules {
-		dir, err := moduleDir(root, module)
+		dir, err := moduleDir(root, module, moduleDirs)
 		if err != nil {
 			return nil, err
 		}
@@ -122,18 +133,37 @@ func run(root string, sheets, modules, builders []string) ([]string, error) {
 	return append(out, violations...), nil
 }
 
-// readSheet parses the stylesheet at path. A sheet that is not a
-// regular file is an error. The change under check can replace the
-// sheet with a symlink to a file outside the checkout or to a device.
-func readSheet(path string) (Sheet, error) {
-	fi, err := os.Lstat(path)
+// relInRoot returns path relative to root. A path outside root fails.
+func relInRoot(root, path string) (string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%s is outside %s", path, root)
+	}
+	return rel, nil
+}
+
+// readSheet parses the stylesheet at rel inside r. A sheet that is not
+// a regular file, or that leaves r through a symlink, is an error.
+func readSheet(r *os.Root, rel, display string) (Sheet, error) {
+	fi, err := r.Lstat(rel)
 	if err != nil {
 		return Sheet{}, err
 	}
 	if !fi.Mode().IsRegular() {
-		return Sheet{}, fmt.Errorf("%s is not a regular file", path)
+		return Sheet{}, fmt.Errorf("%s is not a regular file", display)
 	}
-	src, err := os.ReadFile(path)
+	src, err := readRegularFile(r, rel)
 	if err != nil {
 		return Sheet{}, err
 	}
@@ -141,7 +171,7 @@ func readSheet(path string) (Sheet, error) {
 	// A sheet with no classes means the file moved or the parse broke.
 	// Reporting nothing would read as a pass.
 	if len(sheet.Defined) == 0 {
-		return Sheet{}, fmt.Errorf("no class selectors in %s", path)
+		return Sheet{}, fmt.Errorf("no class selectors in %s", display)
 	}
 	return sheet, nil
 }
@@ -154,19 +184,23 @@ func readSheet(path string) (Sheet, error) {
 // package writes. But a module that neither defines nor writes a class
 // is an error, because the flag then names the wrong module.
 //
-// It reads every file of the module and starts no git. The directory is
-// a copy in the module cache, or a replace target that the app's go.mod
-// names, so the files of the change under check can choose it.
+// It reads every file of the module through an os.Root and starts no
+// git.
 func readModule(dir string, builders []string) ([]string, map[string]bool, error) {
-	classes, err := moduleClasses(dir)
+	r, err := openRoot(dir)
 	if err != nil {
 		return nil, nil, err
 	}
-	paths, err := walkFiles(dir)
+	defer r.Close()
+	classes, err := moduleClasses(r)
 	if err != nil {
 		return nil, nil, err
 	}
-	refs, err := readRefs(paths, builders)
+	paths, err := walkFiles(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	refs, err := readRefs(r, paths, builders)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -177,20 +211,20 @@ func readModule(dir string, builders []string) ([]string, map[string]bool, error
 }
 
 // moduleClasses is every class that a .css file of the module defines.
-// It reads only regular files, as walkFiles does.
-func moduleClasses(dir string) ([]string, error) {
+// It reads only regular files through r, as walkFiles does.
+func moduleClasses(r *os.Root) ([]string, error) {
 	var out []string
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(r.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() && skipDirs[d.Name()] {
-			return filepath.SkipDir
+			return fs.SkipDir
 		}
 		if !d.Type().IsRegular() || filepath.Ext(path) != ".css" {
 			return nil
 		}
-		src, err := os.ReadFile(path)
+		src, err := readRegularFile(r, path)
 		if err != nil {
 			return err
 		}
@@ -200,9 +234,11 @@ func moduleClasses(dir string) ([]string, error) {
 	return out, err
 }
 
-// moduleDir is the directory of a module the app requires: the replace
-// target in a local experiment, or its copy in the module cache.
-func moduleDir(root, module string) (string, error) {
+// moduleDir is the resolved directory of a module the app requires. It
+// accepts a directory inside GOMODCACHE, inside root, or inside one of
+// allowed (from -module-dir). Any other directory fails before any file
+// there is listed.
+func moduleDir(root, module string, allowed []string) (string, error) {
 	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", module)
 	cmd.Dir = root
 	out, err := cmd.Output()
@@ -215,5 +251,45 @@ func moduleDir(root, module string) (string, error) {
 	if dir == "" {
 		return "", fmt.Errorf("go list -m %s: no source directory; run go mod download", module)
 	}
-	return dir, nil
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", err
+	}
+	bases := allowedModuleBases(root, allowed)
+	for _, base := range bases {
+		if withinDir(resolved, base) {
+			return resolved, nil
+		}
+	}
+	return "", fmt.Errorf("module %s directory %q is outside -root and GOMODCACHE", module, resolved)
+}
+
+func allowedModuleBases(root string, allowed []string) []string {
+	var bases []string
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		bases = append(bases, resolved)
+	}
+	cmd := exec.Command("go", "env", "GOMODCACHE")
+	cmd.Dir = root
+	if out, err := cmd.Output(); err == nil {
+		if cache := strings.TrimSpace(string(out)); cache != "" {
+			if resolved, err := filepath.EvalSymlinks(cache); err == nil {
+				bases = append(bases, resolved)
+			}
+		}
+	}
+	for _, dir := range allowed {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			bases = append(bases, resolved)
+		}
+	}
+	return bases
+}
+
+func withinDir(dir, base string) bool {
+	rel, err := filepath.Rel(base, dir)
+	if err != nil {
+		return false
+	}
+	return rel == "." || filepath.IsLocal(rel)
 }

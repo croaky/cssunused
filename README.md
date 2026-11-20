@@ -23,18 +23,26 @@ go tool cssunused -sheet ui/css/app.css
 ## Flags
 
 - `-sheet path`: an app stylesheet to check. Repeat it for each sheet.
-  The path names a regular file. A symlink is an error.
+  The path must lie inside `-root` and name a regular file. A symlink in
+  the path or a path outside `-root` is an error.
 - `-root dir`: the directory of the app's templates, scripts, and Go.
-  The default is the current directory.
+  The default is the current directory. A `-root` that is a symlink is
+  an error.
 - `-module path`: a required Go module whose sheet the app serves, such
-  as `github.com/croaky/chart`, or whose markup the app renders, such
-  as `github.com/croaky/highlight`. Repeat it for each module. The
-  command reads the module's `.css` files for the classes it defines,
-  and its views, scripts, and Go for the classes it writes. A module
-  with no sheet is fine when its Go writes a class; a module that does
-  neither is an error. The command finds the module with `go list -m`,
-  so the app's `go.mod` must require it. The lint does not read a
-  module's sheet, because the module keeps the rules of its own repo.
+  as `github.com/croaky/chart`, or whose markup the app renders, such as
+  `github.com/croaky/highlight`. Repeat it for each module. The command
+  reads the module's `.css` files for the classes it defines, and its
+  views, scripts, and Go for the classes it writes. A module with no
+  sheet is fine when its Go writes a class; a module that does neither
+  is an error. The command finds the module with `go list -m`, so the
+  app's `go.mod` must require it. The resolved module directory must lie
+  inside `GOMODCACHE`, `-root`, or a `-module-dir` directory. The lint
+  does not read a module's sheet, because the module keeps the rules of
+  its own repo.
+- `-module-dir dir`: an outside directory that a `-module` `replace`
+  directive may read in a local experiment. Repeat it for each
+  directory. The operator names it on the command line, so the change
+  under check cannot choose an outside directory.
 - `-builder name`: a script function whose arguments hold a class, such
   as `div("row")`. Repeat it for each function.
 
@@ -76,9 +84,11 @@ subdirectory of a checkout, and each `-module` directory get a read of
 every file, with no git. Either way the scan skips `.git`,
 `node_modules`, `testdata`, and `vendor`.
 
-The scan reads only regular files. It skips a symlink, a device, a
-FIFO, and a socket. A change can hold a symlink, and a read through it
-would read a file outside the checkout, or a device that never ends.
+The scan opens `-root` and each module directory through `os.Root` and
+reads only regular files. It skips a symlink, a device, a FIFO, and a
+socket, and it refuses any symlink that leaves the root. A change can
+hold a symlink, and a read through it would read a file outside the
+checkout, or a device that never ends.
 
 git starts only in a `-root` that holds a `.git` entry, and only when
 that entry is a directory or a regular file (a gitfile, as in a

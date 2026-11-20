@@ -338,16 +338,123 @@ func TestReadModuleReadsNoSymlink(t *testing.T) {
 
 // A -sheet that is a symlink is an error, because the change under
 // check can replace the sheet with a link to a device or to a file
-// outside the checkout.
+// outside the checkout. A symlinked parent directory or a sheet outside
+// -root also fails.
 func TestReadSheetRejectsASymlink(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
-	path := filepath.Join(t.TempDir(), "app.css")
+	root := t.TempDir()
+	path := filepath.Join(root, "app.css")
 
 	outsideLink(t, path, ".card { color: red; }\n")
 
-	_, err := readSheet(path)
+	_, err := run(root, []string{path}, nil, nil, nil)
 	is.HasErr(err)
+}
+
+func TestRunRejectsSymlinkParentOfSheet(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	write(t, filepath.Join(outside, "css", "app.css"), "@layer components { .secret-sheet { color: red; } }\n")
+	is.NoErr(os.Symlink(outside, filepath.Join(root, "ui")))
+	write(t, filepath.Join(root, "index.hml"), ".card\n")
+
+	got, err := run(root, []string{filepath.Join(root, "ui", "css", "app.css")}, nil, nil, nil)
+	is.HasErr(err)
+	is.Eq(len(got), 0)
+}
+
+func TestRunRejectsSheetOutsideRoot(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	sheet := filepath.Join(outside, "app.css")
+	write(t, sheet, "@layer components { .outside-sheet { color: red; } }\n")
+	write(t, filepath.Join(root, "index.hml"), ".card\n")
+
+	got, err := run(root, []string{sheet}, nil, nil, nil)
+	is.HasErr(err)
+	is.Eq(len(got), 0)
+}
+
+func TestRefsRejectsSymlinkRoot(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	target := t.TempDir()
+
+	git := exec.Command("git", "init", "-q")
+	git.Dir = target
+	is.NoErr(git.Run())
+	write(t, filepath.Join(target, "app.ts"), "el.classList.add(\"outside-repo\");\n")
+
+	link := filepath.Join(t.TempDir(), "web")
+	is.NoErr(os.Symlink(target, link))
+
+	refs, err := Refs(link, nil)
+	is.HasErr(err)
+	is.True(!refs["outside-repo"])
+}
+
+func TestRefsSkipsGitListedFileThroughSymlinkDir(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	write(t, filepath.Join(outside, "file.ts"), "el.classList.add(\"escaped-dir\");\n")
+	write(t, filepath.Join(root, "dir", "file.ts"), "el.classList.add(\"inside\");\n")
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"add", "dir/file.ts"},
+	} {
+		git := exec.Command("git", args...)
+		git.Dir = root
+		is.NoErr(git.Run())
+	}
+	// Replace the tracked directory on disk with a symlink outside root.
+	is.NoErr(os.RemoveAll(filepath.Join(root, "dir")))
+	is.NoErr(os.Symlink(outside, filepath.Join(root, "dir")))
+
+	refs, err := Refs(root, nil)
+	is.NoErr(err)
+	is.True(!refs["escaped-dir"])
+}
+
+func TestModuleDirRejectsOutsideReplaceUnlessAllowed(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	write(t, filepath.Join(outside, "go.mod"), "module example.com/ext\n\ngo 1.24\n")
+	write(t, filepath.Join(outside, "ext.css"), "@layer components { .ext-class { color: red; } }\n")
+	write(t, filepath.Join(root, "go.mod"),
+		"module example.com/app\n\ngo 1.24\n\nrequire example.com/ext v0.0.0\n\nreplace example.com/ext => "+outside+"\n")
+	sheet := filepath.Join(root, "app.css")
+	write(t, sheet, "@layer components { .card { color: red; } }\n")
+	write(t, filepath.Join(root, "index.hml"), ".card\n")
+
+	got, err := run(root, []string{sheet}, []string{"example.com/ext"}, nil, nil)
+	is.HasErr(err)
+	is.Eq(len(got), 0)
+
+	got, err = run(root, []string{sheet}, []string{"example.com/ext"}, []string{outside}, nil)
+	is.NoErr(err)
+	is.Eq(got, []string{"unused: .ext-class"})
+}
+
+func TestModuleDirAcceptsModuleCache(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	dir, err := moduleDir(".", "github.com/croaky/is", nil)
+	is.NoErr(err)
+	is.True(dir != "")
 }
 
 func TestRefsRejectsGoItCannotParse(t *testing.T) {
@@ -389,7 +496,7 @@ func TestRunReportsUnusedClassesAndLintsEachSheet(t *testing.T) {
 	write(t, filepath.Join(root, "web", "handler.go"),
 		"package web\n\nfunc statusClass() string { return \"tag-priority\" }\n")
 
-	got, err := run(root, []string{app, site}, nil, nil)
+	got, err := run(root, []string{app, site}, nil, nil, nil)
 	is.NoErr(err)
 	is.Eq(got, []string{
 		"unused: .paperclip",
@@ -401,11 +508,15 @@ func TestRunReportsUnusedClassesAndLintsEachSheet(t *testing.T) {
 func TestReadSheetRejectsASheetWithNoClasses(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
-	path := filepath.Join(t.TempDir(), "app.css")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.css")
 
 	write(t, path, "body { margin: 0; }\n")
+	r, err := openRoot(dir)
+	is.NoErr(err)
+	defer r.Close()
 
-	_, err := readSheet(path)
+	_, err = readSheet(r, "app.css", path)
 	is.HasErr(err)
 }
 
@@ -419,11 +530,17 @@ func TestModuleClasses(t *testing.T) {
 	write(t, filepath.Join(dir, "lib.css"), "@layer components { .lib-tip { color: red; } }\n")
 	write(t, filepath.Join(dir, "testdata", "fixture.css"), ".fixture { color: red; }\n")
 
-	got, err := moduleClasses(dir)
+	r, err := openRoot(dir)
+	is.NoErr(err)
+	defer r.Close()
+	got, err := moduleClasses(r)
 	is.NoErr(err)
 	is.Eq(got, []string{"lib-tip"})
 
-	got, err = moduleClasses(t.TempDir())
+	empty, err := openRoot(t.TempDir())
+	is.NoErr(err)
+	defer empty.Close()
+	got, err = moduleClasses(empty)
 	is.NoErr(err)
 	is.Eq(len(got), 0)
 }

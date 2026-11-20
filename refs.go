@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -41,15 +42,55 @@ var skipDirs = map[string]bool{
 // that returns whole literals, rather than widen the scan until nothing
 // can be reported.
 func Refs(root string, builders []string) (map[string]bool, error) {
-	paths, err := sourceFiles(root)
+	r, err := openRoot(root)
 	if err != nil {
 		return nil, err
 	}
-	return readRefs(paths, builders)
+	defer r.Close()
+	return refsInRoot(r, root, builders)
+}
+
+// openRoot opens dir as an os.Root. A dir that is itself a symlink
+// fails, because os.OpenRoot follows symlinks in the root path.
+func openRoot(dir string) (*os.Root, error) {
+	fi, err := os.Lstat(filepath.Clean(dir))
+	if err != nil {
+		return nil, err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symlink", dir)
+	}
+	return os.OpenRoot(dir)
+}
+
+// readRegularFile opens path through r, confirms on the opened file
+// that it is a regular file, and returns its contents.
+func readRegularFile(r *os.Root, path string) ([]byte, error) {
+	f, err := r.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return io.ReadAll(f)
+}
+
+func refsInRoot(r *os.Root, root string, builders []string) (map[string]bool, error) {
+	paths, err := sourceFiles(r, root)
+	if err != nil {
+		return nil, err
+	}
+	return readRefs(r, paths, builders)
 }
 
 // readRefs collects the class names that the files at paths write.
-func readRefs(paths, builders []string) (map[string]bool, error) {
+func readRefs(r *os.Root, paths, builders []string) (map[string]bool, error) {
 	builderRE := builderPattern(builders)
 	out := map[string]bool{}
 	for _, path := range paths {
@@ -59,7 +100,7 @@ func readRefs(paths, builders []string) (map[string]bool, error) {
 		default:
 			continue
 		}
-		b, err := os.ReadFile(path)
+		b, err := readRegularFile(r, path)
 		if err != nil {
 			return nil, err
 		}
@@ -103,7 +144,14 @@ func readRefs(paths, builders []string) (map[string]bool, error) {
 // an explicit --git-dir and does no discovery. When git rejects the
 // .git entry, such as an empty directory, git fails and the run fails.
 // git does not fall back to root as a bare repository.
-func sourceFiles(root string) ([]string, error) {
+func sourceFiles(r *os.Root, root string) ([]string, error) {
+	fi, err := r.Lstat(".git")
+	if errors.Is(err, fs.ErrNotExist) {
+		return walkFiles(r)
+	}
+	if err != nil {
+		return nil, err
+	}
 	// git reads a relative --git-dir from its own directory, and
 	// GIT_CEILING_DIRECTORIES ignores a relative path.
 	abs, err := filepath.Abs(root)
@@ -111,13 +159,6 @@ func sourceFiles(root string) ([]string, error) {
 		return nil, err
 	}
 	gitDir := filepath.Join(abs, ".git")
-	fi, err := os.Lstat(gitDir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return walkFiles(root)
-	}
-	if err != nil {
-		return nil, err
-	}
 	if !fi.IsDir() && !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a directory or a regular file", gitDir)
 	}
@@ -134,33 +175,34 @@ func sourceFiles(root string) ([]string, error) {
 	}
 	var paths []string
 	for rel := range bytes.SplitSeq(bytes.TrimSuffix(out, []byte{0}), []byte{0}) {
-		if len(rel) == 0 || inSkipDir(string(rel)) {
+		name := string(rel)
+		if name == "" || inSkipDir(name) {
 			continue
 		}
-		path := filepath.Join(root, string(rel))
 		// git lists a tracked file that the work tree deleted, and a
-		// symlink, which Lstat does not follow.
-		if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() {
-			paths = append(paths, path)
+		// symlink, which r.Lstat does not follow and refuses when any
+		// parent symlink leaves r.
+		if fi, err := r.Lstat(name); err == nil && fi.Mode().IsRegular() {
+			paths = append(paths, name)
 		}
 	}
 	return paths, nil
 }
 
-// walkFiles lists every regular file under root outside skipDirs.
+// walkFiles lists every regular file under r outside skipDirs.
 //
 // A listing skips a symlink, a device, a FIFO, and a socket, here and in
 // sourceFiles. The change under check can hold a symlink, since git
 // stores its target as content. A read through it would read a file
 // outside the root, or a device that never ends.
-func walkFiles(root string) ([]string, error) {
+func walkFiles(r *os.Root) ([]string, error) {
 	var paths []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(r.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() && skipDirs[d.Name()] {
-			return filepath.SkipDir
+			return fs.SkipDir
 		}
 		if d.Type().IsRegular() {
 			paths = append(paths, path)
