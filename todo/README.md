@@ -5,13 +5,8 @@ which the changes land. The commit that finishes a change deletes its
 file. The next file takes a number past the highest one ever used, so
 a number in an old commit names one plan only.
 
-- `005-layer-set-once-per-block.md`: `security:` `ParseSheet` finds
-  the class set of a layer once for each block.
 - `006-threat-model-in-readme.md`: `doc:` the threat model moves to
   `README.md`.
-
-005 changes only `sheet.go`, and 006 changes only docs, so each can
-land in parallel with the others.
 
 Every change runs the `Checkfile` list before it opens.
 
@@ -28,14 +23,7 @@ that names the attacker, the consequence, and the boundary.
 
 ### Open findings
 
-Each finding below was scanned at 0bf0335. A probe against a build of
-that commit, with git 2.56.1 on APFS, proved each path, except where a
-line says otherwise.
-
-- `find_015Z9z7aWRTgcTUhL8BHih1r` (low): `ParseSheet` hashes the whole
-  layer name for each class. The probe took 0.17 s for 200 KB, 0.58 s
-  for 400 KB, and 1.59 s for 800 KB. Fix:
-  `005-layer-set-once-per-block.md`.
+None.
 
 ## Threat model
 

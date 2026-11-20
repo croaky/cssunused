@@ -42,6 +42,7 @@ type Sheet struct {
 type frame struct {
 	sel       string
 	layer     string
+	layerSet  map[string]bool
 	inRule    bool
 	nested    bool
 	keyframes bool
@@ -100,8 +101,18 @@ func ParseSheet(src string) Sheet {
 			head := strings.Join(strings.Fields(buf.String()), " ")
 			top := stack[len(stack)-1]
 			layer := top.layer
+			layerSet := top.layerSet
 			if name, ok := strings.CutPrefix(head, "@layer "); ok {
 				layer = name
+				if layer != "" {
+					layerSet = layers[layer]
+					if layerSet == nil {
+						layerSet = map[string]bool{}
+						layers[layer] = layerSet
+					}
+				} else {
+					layerSet = nil
+				}
 			}
 			if layer == "" && len(stack) == 1 {
 				out.Unlayered = append(out.Unlayered, head)
@@ -111,6 +122,7 @@ func ParseSheet(src string) Sheet {
 			}
 			next := top
 			next.layer = layer
+			next.layerSet = layerSet
 			isRule := head != "" && !strings.HasPrefix(head, "@") && !top.keyframes
 			// A rule is top-level when no parent rule wraps it.
 			if layer == "components" && isRule && !top.inRule {
@@ -123,7 +135,7 @@ func ParseSheet(src string) Sheet {
 			case strings.HasPrefix(head, "@keyframes"):
 				next.keyframes = true
 			case isRule:
-				next = frame{sel: head, layer: layer, inRule: true, nested: top.inRule}
+				next = frame{sel: head, layer: layer, layerSet: layerSet, inRule: true, nested: top.inRule}
 				for _, s := range splitCommas(head) {
 					if namesID(s) {
 						out.IDSelectors = append(out.IDSelectors, strings.TrimSpace(s))
@@ -131,13 +143,9 @@ func ParseSheet(src string) Sheet {
 				}
 				for _, cl := range classesIn(head) {
 					defined[cl] = true
-					if layer == "" {
-						continue
+					if layerSet != nil {
+						layerSet[cl] = true
 					}
-					if layers[layer] == nil {
-						layers[layer] = map[string]bool{}
-					}
-					layers[layer][cl] = true
 				}
 			}
 			stack = append(stack, next)
@@ -159,7 +167,9 @@ func ParseSheet(src string) Sheet {
 	out.Defined = sortedKeys(defined)
 	out.Layers = map[string][]string{}
 	for layer, classes := range layers {
-		out.Layers[layer] = sortedKeys(classes)
+		if len(classes) > 0 {
+			out.Layers[layer] = sortedKeys(classes)
+		}
 	}
 	return out
 }

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/croaky/is"
 )
@@ -277,4 +279,43 @@ func TestParseSheetDeepNestingIsLinear(t *testing.T) {
 
 	is.Eq(sheet.Defined, []string{"a", "b"})
 	is.Eq(sheet.Important, []string{".a, & .b, & & { color: red !important }"})
+}
+
+// A sheet with nine class-bearing layers and a long layer name parses
+// in time linear in its size, not quadratic in the layer name length
+// times the class count.
+func TestParseSheetLongLayerNameIsLinear(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	makeSheet := func(size int) string {
+		var b strings.Builder
+		for i := range 8 {
+			fmt.Fprintf(&b, "@layer l%d { .c%d { color: red; } }\n", i, i)
+		}
+		name := strings.Repeat("a", size/2)
+		rules := strings.Repeat(".x{}", size/8)
+		fmt.Fprintf(&b, "@layer %s { %s }\n", name, rules)
+		return b.String()
+	}
+
+	small := makeSheet(100_000)
+	large := makeSheet(400_000)
+
+	// Warm up before timing.
+	ParseSheet(small)
+
+	t0 := time.Now()
+	s1 := ParseSheet(small)
+	dSmall := time.Since(t0)
+
+	t1 := time.Now()
+	s2 := ParseSheet(large)
+	dLarge := time.Since(t1)
+
+	is.Eq(len(s1.Layers), 9)
+	is.Eq(len(s2.Layers), 9)
+	// A 4x larger sheet takes ~4x as long in linear time and ~16x in
+	// quadratic time. Allow 8x for scheduling noise.
+	is.True(dLarge < dSmall*8)
 }
