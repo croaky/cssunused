@@ -400,6 +400,32 @@ func TestRefsRejectsSymlinkRoot(t *testing.T) {
 	is.True(!refs["outside-repo"])
 }
 
+func TestRefsRejectsSymlinkParentOfRelativeRoot(t *testing.T) {
+	is := is.New(t)
+	checkout := t.TempDir()
+	outside := t.TempDir()
+
+	write(t, filepath.Join(outside, "web", "app.ts"), "el.classList.add(\"outside-repo\");\n")
+	is.NoErr(os.Symlink(outside, filepath.Join(checkout, "apps")))
+
+	write(t, filepath.Join(checkout, "real", "web", "app.ts"), "el.classList.add(\"inside-app\");\n")
+	is.NoErr(os.Symlink(filepath.Join(checkout, "real"), filepath.Join(checkout, "alias")))
+
+	t.Chdir(checkout)
+
+	refs, err := Refs(filepath.Join("apps", "web"), nil)
+	is.HasErr(err)
+	is.True(!refs["outside-repo"])
+
+	refs, err = Refs(filepath.Join("alias", "web"), nil)
+	is.HasErr(err)
+	is.True(!refs["inside-app"])
+
+	refs, err = Refs(filepath.Join("real", "web"), nil)
+	is.NoErr(err)
+	is.True(refs["inside-app"])
+}
+
 func TestRefsSkipsGitListedFileThroughSymlinkDir(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

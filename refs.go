@@ -50,17 +50,39 @@ func Refs(root string, builders []string) (map[string]bool, error) {
 	return refsInRoot(r, root, builders)
 }
 
-// openRoot opens dir as an os.Root. A dir that is itself a symlink
-// fails, because os.OpenRoot follows symlinks in the root path.
+// openRoot opens dir as an os.Root. A dir that is a symlink fails,
+// because os.OpenRoot follows symlinks in the root path. When dir is a
+// local relative path, each path component from the working directory
+// must also not be a symlink.
 func openRoot(dir string) (*os.Root, error) {
-	fi, err := os.Lstat(filepath.Clean(dir))
+	clean := filepath.Clean(dir)
+	if filepath.IsLocal(clean) && clean != "." {
+		cwd, err := os.OpenRoot(".")
+		if err != nil {
+			return nil, err
+		}
+		defer cwd.Close()
+		var prefix string
+		for part := range strings.SplitSeq(filepath.ToSlash(clean), "/") {
+			prefix = filepath.Join(prefix, part)
+			fi, err := cwd.Lstat(prefix)
+			if err != nil {
+				return nil, err
+			}
+			if fi.Mode()&os.ModeSymlink != 0 {
+				return nil, fmt.Errorf("%s is a symlink", prefix)
+			}
+		}
+		return cwd.OpenRoot(clean)
+	}
+	fi, err := os.Lstat(clean)
 	if err != nil {
 		return nil, err
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("%s is a symlink", dir)
 	}
-	return os.OpenRoot(dir)
+	return os.OpenRoot(clean)
 }
 
 // readRegularFile opens path through r, confirms on the opened file
